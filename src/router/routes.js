@@ -4,6 +4,7 @@ const routes = [
     component: () => import('layouts/MainLayout.vue'),
     children: [
       { path: '', component: () => import('pages/IndexPage.vue') },
+      { path: 'gate-access', component: () => import('pages/GateAccess.vue') },
       { path: 'qr-scanner', component: () => import('pages/QRScannerPage.vue') },
       { path: 'binary-flash', component: () => import('pages/BinaryFlashPage.vue') }
     ]

@@ -4,6 +4,14 @@
       <q-btn
         size="lg"
         color="primary"
+        label="Gate Access System"
+        icon="security"
+        @click="$router.push('/gate-access')"
+        class="q-py-md"
+      />
+      <q-btn
+        size="lg"
+        color="secondary"
         label="QR Code Scanner"
         icon="qr_code_scanner"
         @click="$router.push('/qr-scanner')"
@@ -11,7 +19,7 @@
       />
       <q-btn
         size="lg"
-        color="secondary"
+        color="accent"
         label="Binary Flash"
         icon="looks_one"
         @click="$router.push('/binary-flash')"
