@@ -1,15 +1,88 @@
 <template>
-  <q-page class="flex flex-center column q-pa-md">
-    <div class="full-width" style="max-width: 600px;">
+  <q-page class="flex flex-center column q-pa-md" style="padding: 0;">
+    <!-- Dual Mode Transmitter - Keep visible during detection -->
+    <HighSpeedBinaryTransmitter
+      v-show="dualModeTransmittedCode && (isTransmittingDual || isDetectingFlashes)"
+      ref="dualTransmitterRef"
+      :binary-code="dualModeTransmittedCode || '00000000'"
+      :target-fps="30"
+      :show-info="false"
+      @signal-completed="onDualTransmissionCompleted"
+      @signal-started="() => { isTransmittingDual = true }"
+    />
+
+    <!-- Flash Detector - Hidden camera preview -->
+    <FlashDetector
+      v-show="isDetectingFlashes"
+      ref="detectorRef"
+      :camera-id="selectedCameraId"
+      :code-length="flashCodeLength"
+      :brightness-threshold="brightnessThreshold"
+      :show-preview="false"
+      :show-info="false"
+      @code-detected="onFlashCodeDetected"
+      @error="onDetectorError"
+      @frame-rate="onDetectorFrameRate"
+    />
+
+    <!-- Main UI -->
+    <div v-if="!isDetectingFlashes && !isTransmittingDual" class="column q-gutter-md" style="max-width: 500px; width: 100%; padding: 24px;">
+      <q-btn flat icon="arrow_back" label="Back" @click="goBack" />
+      
+      <div class="text-h5 text-center">Dual Mode: Transmitter & Receiver</div>
+      
+      <!-- Transmitter Section -->
+      <q-card>
+        <q-card-section>
+          <div class="text-subtitle1 q-mb-md">Transmitter</div>
+          
+          <q-input
+            v-model.number="dualModeCodeLength"
+            type="number"
+            label="Code Length (bits)"
+            :min="4"
+            :max="32"
+            outlined
+            class="q-mb-md"
+          />
+
       <q-btn
-        flat
-        icon="arrow_back"
-        label="Back"
-        @click="goBack"
+            color="primary"
+            size="lg"
+            icon="flash_on"
+            label="Generate & Start Transmitting"
+            class="full-width"
+            @click="startDualModeTransmission"
+          />
+        </q-card-section>
+      </q-card>
+
+      <!-- Receiver Section -->
+      <q-card>
+        <q-card-section>
+          <div class="text-subtitle1 q-mb-md">Receiver</div>
+          
+          <q-input
+            v-model.number="flashCodeLength"
+            type="number"
+            label="Expected Code Length (bits)"
+            :min="4"
+            :max="32"
+            outlined
+            class="q-mb-md"
+          />
+
+          <q-slider
+            v-model="brightnessThreshold"
+            :min="50"
+            :max="200"
+            label
+            label-always
+            :label-value="`Threshold: ${brightnessThreshold}`"
+            color="secondary"
         class="q-mb-md"
       />
 
-      <div class="column q-gutter-md">
         <q-select
           v-if="cameraOptions.length > 0"
           v-model="selectedCameraId"
@@ -19,239 +92,373 @@
           emit-value
           map-options
           outlined
-          label="Select camera"
-          :disable="isScanning || isStarting"
-          :loading="isLoadingCameras"
-        />
-
-        <div v-else-if="!isLoadingCameras" class="text-body2 text-negative">
-          No cameras detected. Connect a camera and refresh the page.
-        </div>
-
-        <div v-if="scannerError" class="bg-negative text-white q-pa-sm q-rounded-borders">
-          {{ scannerError }}
-        </div>
-
-        <div class="row q-gutter-sm">
-          <q-btn
-            color="primary"
-            label="Start Scanner"
-            icon="qr_code_scanner"
-            class="col"
-            size="lg"
-            :loading="isStarting"
-            :disable="isStarting || isScanning || !selectedCameraId"
-            @click="prepareScanner"
+            label="Camera Device"
+            class="q-mb-md"
           />
+
           <q-btn
-            v-if="isScanning"
+            color="secondary"
+            size="lg"
+            icon="camera_alt"
+            label="Start Detection"
+            class="full-width"
+            @click="startFlashDetection"
+            :disable="!dualModeTransmittedCode"
+          />
+          
+          <div v-if="!dualModeTransmittedCode" class="text-caption text-warning q-mt-sm text-center">
+            Start transmission first
+          </div>
+        </q-card-section>
+      </q-card>
+    </div>
+
+    <!-- Transmission Status -->
+    <div v-if="isTransmittingDual && !isDetectingFlashes" class="status-overlay">
+      <q-card style="min-width: 300px;">
+        <q-card-section>
+          <div class="text-h6 q-mb-md">Transmitting Signal</div>
+          
+          <div class="q-mb-md">
+            <div class="text-caption text-grey-7">Binary Code</div>
+            <div class="text-h5 text-primary text-weight-bold">{{ dualModeTransmittedCode }}</div>
+          </div>
+          
+          <div class="text-body2 text-info q-mb-md text-center">
+            Screen is flashing. Start detection below to scan.
+          </div>
+
+          <q-btn
             color="negative"
-            label="Stop"
-            icon="close"
-            class="col"
-            size="lg"
-            @click="stopScanner"
+            label="Stop Transmission"
+            icon="stop"
+            class="full-width q-mb-sm"
+            @click="stopDualTransmission"
           />
+          
+          <q-btn
+            color="secondary"
+            label="Start Detection"
+            icon="camera_alt"
+            class="full-width"
+            @click="startFlashDetection"
+          />
+        </q-card-section>
+      </q-card>
+    </div>
+
+    <!-- Detection Status -->
+    <div v-if="isDetectingFlashes" class="status-overlay">
+      <q-card style="min-width: 300px;">
+        <q-card-section>
+          <div class="text-h6 q-mb-md">Detecting Signal</div>
+          
+          <div v-if="dualModeTransmittedCode" class="q-mb-md" style="background: rgba(25, 118, 210, 0.1); padding: 12px; border-radius: 8px;">
+            <div class="text-caption text-grey-7 q-mb-xs">Transmitting Code:</div>
+            <div class="text-h6 text-primary text-weight-bold">{{ dualModeTransmittedCode }}</div>
+            <div class="text-caption text-info q-mt-xs">
+              Point camera at the flashing screen
+            </div>
         </div>
 
-        <div v-if="isStarting" class="text-subtitle2 text-primary text-center">
-          Starting camera...
+          <div class="q-mb-md">
+            <div class="text-caption text-grey-7">Detected Bits</div>
+            <div class="text-h5 text-secondary text-weight-bold">{{ detectedBits || 'Waiting...' }}</div>
         </div>
 
-        <div v-show="showScanner" class="qr-reader-container">
-          <div id="qr-reader"></div>
+          <div v-if="detectedBits.length > 0" class="q-mb-md">
+            <q-linear-progress
+              :value="(detectedBits.length / flashCodeLength) * 100"
+              color="positive"
+              size="20px"
+            >
+              <div class="absolute-full flex flex-center">
+                <q-badge
+                  color="white"
+                  text-color="primary"
+                  :label="`${detectedBits.length}/${flashCodeLength}`"
+                />
+              </div>
+            </q-linear-progress>
         </div>
 
-        <q-card v-if="scannedData" class="q-mt-lg">
-          <q-card-section>
-            <div class="text-h6">Scanned Result</div>
-            <div class="text-body1 q-mt-sm">{{ scannedData }}</div>
+          <div class="row q-gutter-md q-mb-md">
+            <div class="col">
+              <div class="text-caption text-grey-7">Frame Rate</div>
+              <div class="text-body1 text-weight-bold">{{ detectorFrameRate || 0 }} fps</div>
+            </div>
+            <div class="col">
+              <div class="text-caption text-grey-7">Brightness</div>
+              <div class="text-body1 text-weight-bold">{{ currentBrightness.toFixed(1) }}</div>
+            </div>
+          </div>
+
+          <q-btn
+            color="negative"
+            label="Stop Detection"
+            icon="stop"
+            class="full-width"
+            @click="stopFlashDetection"
+          />
           </q-card-section>
         </q-card>
-      </div>
     </div>
+
+    <!-- Success Dialog -->
+    <q-dialog v-model="showSuccessDialog" persistent>
+      <q-card style="min-width: 300px;">
+        <q-card-section class="text-center">
+          <q-icon name="check_circle" size="64px" color="positive" class="q-mb-md" />
+          <div class="text-h5 text-positive q-mb-sm">Access Granted!</div>
+          <div class="text-body1 text-grey-7 q-mb-md">Detected Code: {{ detectedCode }}</div>
+          <q-btn
+            color="positive"
+            label="Close"
+            class="full-width"
+            @click="closeSuccessDialog"
+          />
+        </q-card-section>
+      </q-card>
+    </q-dialog>
   </q-page>
 </template>
 
 <script setup>
 import { ref, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
-import { Html5Qrcode } from 'html5-qrcode'
+import { Notify } from 'quasar'
+import FlashDetector from 'src/components/FlashDetector.vue'
+import HighSpeedBinaryTransmitter from 'src/components/HighSpeedBinaryTransmitter.vue'
+import { useQrScanner } from 'src/composables/useQrScanner'
 
 const router = useRouter()
-const cameras = ref([])
-const cameraOptions = ref([])
+
+const { cameraOptions, loadCameras } = useQrScanner()
+
+// Dual mode transmitter state
+const isTransmittingDual = ref(false)
+const dualTransmitterRef = ref(null)
+const dualModeTransmittedCode = ref('')
+const dualModeCodeLength = ref(8)
+
+// Detection state
+const isDetectingFlashes = ref(false)
+const detectorRef = ref(null)
 const selectedCameraId = ref(null)
-const isLoadingCameras = ref(false)
-const isStarting = ref(false)
-const showScanner = ref(false)
-const isScanning = ref(false)
-const scannerError = ref('')
-const scannedData = ref('')
-let html5QrCode = null
+const flashCodeLength = ref(8)
+const brightnessThreshold = ref(100)
+const detectedBits = ref('')
+const detectedCode = ref('')
+const detectorFrameRate = ref(0)
+const currentBrightness = ref(0)
+const showSuccessDialog = ref(false)
 
-const loadCameras = async () => {
-  isLoadingCameras.value = true
-  scannerError.value = ''
+let updateInterval = null
 
-  try {
-    const devices = await Html5Qrcode.getCameras()
+const generateRandomCode = (length) => {
+  let code = ''
+  for (let i = 0; i < length; i++) {
+    code += Math.random() > 0.5 ? '1' : '0'
+  }
+  return code
+}
 
-    if (!devices || devices.length === 0) {
-      cameras.value = []
-      cameraOptions.value = []
-      scannerError.value = 'No cameras found. Connect a camera and try again.'
-      return
-    }
+const startDualModeTransmission = async () => {
+  if (isTransmittingDual.value) return
 
-    cameras.value = devices
-    cameraOptions.value = devices.map((device, index) => ({
-      label: device.label || `Camera ${index + 1}`,
-      value: device.id
-    }))
+  const code = generateRandomCode(dualModeCodeLength.value)
+  dualModeTransmittedCode.value = code
 
-    const preferredDevice = devices.find((device) => {
-      const label = device.label?.toLowerCase() || ''
-      return label.includes('back') || label.includes('rear') || label.includes('environment')
-    })
+  await nextTick()
+  await new Promise(resolve => setTimeout(resolve, 100))
 
-    selectedCameraId.value = preferredDevice?.id || cameraOptions.value[0]?.value || null
+  if (dualTransmitterRef.value) {
+    try {
+      isTransmittingDual.value = true
+      await dualTransmitterRef.value.start()
   } catch (error) {
-    console.error('Failed to load cameras:', error)
-    scannerError.value = `Unable to access cameras. ${error?.message || error}`
-  } finally {
-    isLoadingCameras.value = false
+      console.error('Error starting dual transmitter:', error)
+      isTransmittingDual.value = false
+      Notify.create({
+        type: 'negative',
+        message: 'Failed to start transmission',
+        position: 'top',
+        timeout: 3000
+      })
+    }
   }
 }
 
-const ensureScannerStopped = async () => {
-  if (html5QrCode) {
-    try {
-      await html5QrCode.stop()
-    } catch (stopError) {
-      console.warn('Error stopping scanner:', stopError)
-    }
-
-    try {
-      html5QrCode.clear()
-    } catch (clearError) {
-      console.warn('Error clearing scanner:', clearError)
-    }
-
-    html5QrCode = null
+const stopDualTransmission = () => {
+  if (dualTransmitterRef.value) {
+    dualTransmitterRef.value.stop()
   }
+  isTransmittingDual.value = false
+  // Keep the code so detection can restart transmission if needed
 }
 
-const isConstraintError = (error) => {
-  const name = error?.name || ''
-  const message = error?.message?.toLowerCase?.() || ''
-  return name === 'OverconstrainedError' || message.includes('overconstrained') || message.includes('constraint')
-}
-
-const startWithConfig = async (cameraId, config) => {
-  await ensureScannerStopped()
-  html5QrCode = new Html5Qrcode('qr-reader')
-
-  await html5QrCode.start(
-    cameraId,
-    config,
-    (decodedText) => {
-      scannedData.value = decodedText
-      stopScanner()
-    },
-    (scanError) => {
-      // Ignore scan errors to avoid console noise; the scanner keeps running
-      if (process.env.NODE_ENV !== 'production') {
-        console.debug('QR scan error:', scanError)
+const onDualTransmissionCompleted = () => {
+  // Keep transmitting if detection is active
+  if (isDetectingFlashes.value && dualModeTransmittedCode.value) {
+    setTimeout(async () => {
+      if (dualTransmitterRef.value && dualModeTransmittedCode.value) {
+        try {
+          await dualTransmitterRef.value.start()
+        } catch (error) {
+          console.error('Error restarting transmission:', error)
+    }
       }
+    }, 100)
+  } else {
+    isTransmittingDual.value = false
+  }
+}
+
+const startFlashDetection = async () => {
+  if (isDetectingFlashes.value) return
+
+  // Ensure transmitter is running
+  if (dualModeTransmittedCode.value && !isTransmittingDual.value) {
+    await startDualModeTransmission()
+    await new Promise(resolve => setTimeout(resolve, 200))
+  }
+
+  await nextTick()
+  await new Promise(resolve => setTimeout(resolve, 100))
+
+  if (detectorRef.value) {
+    try {
+      await detectorRef.value.start()
+      isDetectingFlashes.value = true
+      detectedBits.value = ''
+      
+      updateInterval = setInterval(() => {
+        if (detectorRef.value) {
+          const bits = detectorRef.value.getDetectedBits()
+          const brightness = detectorRef.value.getCurrentBrightness()
+          if (bits !== undefined) {
+            detectedBits.value = bits
+          }
+          if (brightness !== undefined) {
+            currentBrightness.value = brightness
+          }
+        }
+      }, 100)
+      
+    } catch (error) {
+      console.error('Error starting detector:', error)
+      isDetectingFlashes.value = false
+      
+      let errorMessage = 'Failed to start camera'
+      if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
+        errorMessage = 'Camera permission denied. Please allow camera access.'
+      } else if (error.name === 'NotFoundError' || error.name === 'DevicesNotFoundError') {
+        errorMessage = 'No camera found.'
+      } else if (error.name === 'NotReadableError' || error.name === 'TrackStartError') {
+        errorMessage = 'Camera is already in use.'
+      } else if (error.message) {
+        errorMessage = error.message
+      }
+      
+      Notify.create({
+        type: 'negative',
+        message: errorMessage,
+        position: 'top',
+        timeout: 5000
+      })
     }
-  )
-}
-
-const startScanner = async () => {
-  const cameraId = selectedCameraId.value
-  if (!cameraId) {
-    throw new Error('No camera selected')
-  }
-
-  const preferredSize = Math.min(320, window.innerWidth - 48)
-  const primaryConfig = {
-    qrbox: preferredSize > 200 ? preferredSize : 200
-  }
-
-  try {
-    await startWithConfig(cameraId, primaryConfig)
-  } catch (error) {
-    if (isConstraintError(error)) {
-      console.warn('Primary camera constraints failed, retrying with defaults:', error)
-      await startWithConfig(cameraId, undefined)
-    } else {
-      throw error
-    }
   }
 }
 
-const prepareScanner = async () => {
-  if (isStarting.value || isScanning.value) {
-    return
+const stopFlashDetection = () => {
+  if (detectorRef.value) {
+    detectorRef.value.stop()
   }
-
-  scannerError.value = ''
-
-  if (!selectedCameraId.value) {
-    scannerError.value = 'Select a camera before starting.'
-    return
+  
+  if (updateInterval) {
+    clearInterval(updateInterval)
+    updateInterval = null
   }
-
-  scannedData.value = ''
-  isStarting.value = true
-  showScanner.value = true
-
-  try {
-    await nextTick()
-    await startScanner()
-    isScanning.value = true
-  } catch (error) {
-    console.error('Unable to start scanner:', error)
-    scannerError.value = error?.message || error?.name || 'Failed to start the camera.'
-    showScanner.value = false
-    await ensureScannerStopped()
-  } finally {
-    isStarting.value = false
+  
+  isDetectingFlashes.value = false
+  detectedBits.value = ''
+  currentBrightness.value = 0
+  
+  // Stop transmission when detection stops
+  if (isTransmittingDual.value) {
+    stopDualTransmission()
   }
 }
 
-const stopScanner = async () => {
-  await ensureScannerStopped()
-  isScanning.value = false
-  showScanner.value = false
+const onFlashCodeDetected = (code) => {
+  detectedCode.value = code
+  showSuccessDialog.value = true
+  stopFlashDetection()
+  stopDualTransmission()
+  Notify.create({
+    type: 'positive',
+    message: `Code detected: ${code}`,
+    position: 'top',
+    timeout: 3000
+  })
 }
 
-const goBack = async () => {
-  await stopScanner()
+const onDetectorError = (errorMessage) => {
+  console.error('Detector error:', errorMessage)
+  stopFlashDetection()
+  Notify.create({
+    type: 'negative',
+    message: errorMessage,
+    position: 'top',
+    timeout: 4000
+  })
+}
+
+const onDetectorFrameRate = (fps) => {
+  detectorFrameRate.value = Math.round(fps)
+}
+
+const closeSuccessDialog = () => {
+  showSuccessDialog.value = false
+  detectedCode.value = ''
+}
+
+const goBack = () => {
+  if (isDetectingFlashes.value) {
+    stopFlashDetection()
+  }
+  if (isTransmittingDual.value) {
+    stopDualTransmission()
+  }
   router.push('/')
 }
 
-onMounted(() => {
-  loadCameras()
+onMounted(async () => {
+  await loadCameras()
+  if (cameraOptions.value.length > 0) {
+    selectedCameraId.value = cameraOptions.value[0].value
+  }
 })
 
 onUnmounted(() => {
-  stopScanner()
+  if (updateInterval) {
+    clearInterval(updateInterval)
+  }
+  if (isDetectingFlashes.value) {
+    stopFlashDetection()
+  }
+  if (isTransmittingDual.value) {
+    stopDualTransmission()
+  }
 })
 </script>
 
 <style scoped>
-.qr-reader-container {
-  width: 100%;
-  min-height: 320px;
-  border: 2px dashed rgba(0, 0, 0, 0.2);
-  border-radius: 12px;
-  overflow: hidden;
-}
-
-.qr-reader-container #qr-reader {
-  width: 100%;
+.status-overlay {
+  position: fixed;
+  top: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10000;
 }
 </style>
-
